@@ -1,3 +1,4 @@
+import string
 from datetime import (
     datetime,
     timedelta,
@@ -9,6 +10,8 @@ import shutil
 import time
 import tempfile
 import uuid
+import random
+
 from nose.tools import (
     set_trace,
     eq_,
@@ -16,7 +19,7 @@ from nose.tools import (
 # TODO PYTHON3
 # from psycopg2.errors import UndefinedTable
 from sqlalchemy.orm.session import Session
-from sqlalchemy.exc import ProgrammingError
+from sqlalchemy.exc import ProgrammingError, DatabaseError
 from config import Configuration
 
 from lane import (
@@ -122,6 +125,11 @@ def package_setup():
                 pass
             else:
                 raise
+        except DatabaseError as e:
+            if 'no such table' in e.message:
+                pass
+            else:
+                raise
 
 
 def package_teardown():
@@ -189,12 +197,23 @@ class DatabaseTest(object):
 
     engine = None
     connection = None
+    name = None
 
     @classmethod
     def get_database_connection(cls):
         url = Configuration.database_url()
-        engine, connection = SessionManager.initialize(url)
-
+        engine = SessionManager.engine(url)
+        connection = engine.connect()
+        name = ''.join(random.choice(string.ascii_lowercase) for x in range(15))
+        cls.name = name
+        connection.execute("commit")
+        connection.execute("create database {}".format(name))
+        connection.close()
+        engine.dispose()
+        new_url = url.rsplit('/', 1)
+        new_url[1] = name
+        new_url = '/'.join(new_url)
+        engine, connection = SessionManager.initialize(new_url)
         return engine, connection
 
     @classmethod
@@ -216,6 +235,13 @@ class DatabaseTest(object):
         # Destroy the database connection and engine.
         cls.connection.close()
         cls.engine.dispose()
+
+        engine = SessionManager.engine()
+        connection = engine.connect()
+        connection.execute("commit")
+        connection.execute("drop database {}".format(cls.name))
+        connection.close()
+        engine.dispose()
 
         if cls.tmp_data_dir.startswith("/tmp"):
             logging.debug("Removing temporary directory %s" % cls.tmp_data_dir)
